@@ -15,15 +15,19 @@ from shapely.geometry import Polygon, Point
 
 from .store import *
 
+total_unrecognized_labels = 0
+
 def check_label_exists(label, label_map):
+    global total_unrecognized_labels
     ''' Checking if a label is a valid label. 
     '''
     if label in label_map:
         return True
     else:
-        print("py_wsi error: provided label " + str(label) + " not present in label map.")
-        print("Setting label as -1 for UNRECOGNISED LABEL.")
-        print(label_map)
+        total_unrecognized_labels += 1
+        #print("py_wsi error: provided label " + str(label) + " not present in label map.")
+        #print("Setting label as -1 for UNRECOGNISED LABEL.")
+        #print(label_map)
         return False
 
 def generate_label(regions, region_labels, point, label_map):
@@ -125,22 +129,30 @@ def sample_and_store_patches(file_name,
     while y < y_tiles:
         while x < x_tiles:
             new_tile = np.array(tiles.get_tile(level, (x, y)), dtype=np.uint8)
-            # OpenSlide calculates overlap in such a way that sometimes depending on the dimensions, edge
-            # patches are smaller than the others. We will ignore such patches.
-            if np.shape(new_tile) == (patch_size, patch_size, 3):
-                patches.append(new_tile)
-                coords.append(np.array([x, y]))
-                count += 1
-
-                # Calculate the patch label based on centre point.
-                if xml_dir:
-                    converted_coords = tiles.get_tile_coordinates(level, (x, y))[0]
-                    labels.append(generate_label(regions, region_labels, converted_coords, label_map))
-            x += 1
-
-        # To save memory, we will save data into the dbs every rows_per_txn rows. i.e., each transaction will commit
-        # rows_per_txn rows of patches. Write after last row regardless. HDF5 does NOT follow
-        # this convention due to efficiency.
+            #This section of code has been heavily changed to not save patches from
+            #non-annotated areas. If you need a "normal" area, annotate it as such. Otherwise,
+            #the script saves every patch for the entire slide including blank areas. The
+            #original code is located at the bottom of this script and should be inserted
+            #where this comment is and end before the comment below
+            if xml_dir:
+                converted_coords = tiles.get_tile_coordinates(level, (x, y))[0]
+                temp_label = generate_label(regions, region_labels, converted_coords, label_map)
+                if temp_label == -1:
+                    x += 1
+                    continue
+                else:
+                    if np.shape(new_tile) == (patch_size, patch_size, 3):
+                        patches.append(new_tile)
+                        coords.append(np.array([x, y]))
+                        count += 1
+                        labels.append(temp_label)
+                    x += 1
+            elif np.shape(new_tile) == (patch_size, patch_size, 3):
+                    patches.append(new_tile)
+                    coords.append(np.array([x, y]))
+                    count += 1
+                    x += 1
+        ####THIS IS THE END OF THE CHANGED SECTION            
         if (y % rows_per_txn == 0 and y != 0) or y == y_tiles-1:
             if storage_option == 'disk':
                 save_to_disk(db_location, patches, coords, file_name[:-4], labels)
@@ -164,4 +176,26 @@ def sample_and_store_patches(file_name,
     if storage_option == 'lmdb':
         save_meta_in_lmdb(meta_env, file_name[:-4], [x_tiles, y_tiles])
 
+    print("Total Unrecogized Labels: ", total_unrecognized_labels)
     return count
+
+'''
+##########################################################################################
+##                OLD CODE                                                              ##
+##########################################################################################
+            # OpenSlide calculates overlap in such a way that sometimes depending on the dimensions, edge
+            # patches are smaller than the others. We will ignore such patches.
+
+            if np.shape(new_tile) == (patch_size, patch_size, 3):
+                patches.append(new_tile)
+                coords.append(np.array([x, y]))
+                count += 1
+
+                # Calculate the patch label based on centre point.
+
+                #if xml_dir:
+                #    converted_coords = tiles.get_tile_coordinates(level, (x, y))[0]
+                #    labels.append(generate_label(regions, region_labels, converted_coords, label_map))
+
+            x += 1
+'''            
